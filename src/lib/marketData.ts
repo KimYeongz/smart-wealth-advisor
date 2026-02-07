@@ -163,7 +163,7 @@ export function calculatePortfolioValue(
         {
             symbol: "THAI_STOCKS",
             name: "🇹🇭 หุ้นไทย",
-            type: "thai_stock",
+            type: "thai_stock" as const,
             quantity: 1,
             avgCost: thaiValue,
             currentPrice: thaiValue + thaiGain,
@@ -175,7 +175,7 @@ export function calculatePortfolioValue(
         {
             symbol: "US_STOCKS",
             name: "🇺🇸 หุ้น US",
-            type: "us_stock",
+            type: "us_stock" as const,
             quantity: 1,
             avgCost: usValue,
             currentPrice: usValue + usGain,
@@ -187,7 +187,7 @@ export function calculatePortfolioValue(
         {
             symbol: "GOLD",
             name: "🪙 ทองคำ",
-            type: "gold",
+            type: "gold" as const,
             quantity: 1,
             avgCost: goldValue,
             currentPrice: goldValue + goldGain,
@@ -199,7 +199,7 @@ export function calculatePortfolioValue(
         {
             symbol: "BONDS",
             name: "📜 พันธบัตร",
-            type: "bond",
+            type: "bond" as const,
             quantity: 1,
             avgCost: bondValue,
             currentPrice: bondValue + bondGain,

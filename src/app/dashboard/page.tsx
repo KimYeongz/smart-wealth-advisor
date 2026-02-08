@@ -6,6 +6,7 @@ import { MetricCard } from "@/components/ui/MetricCard";
 import { useAuth } from "@/context/AuthContext";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import { getAllMarketData, calculatePortfolioValue, generatePerformanceHistory, MarketPrice } from "@/lib/marketData";
+import { getPortfolio } from "@/lib/portfolioService";
 import { Wallet, TrendingUp, PieChart, BarChart3, RefreshCw } from "lucide-react";
 import {
     AreaChart,
@@ -28,21 +29,33 @@ export default function DashboardPage() {
     const [marketData, setMarketData] = useState<MarketPrice[]>([]);
     const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
     const [isRefreshing, setIsRefreshing] = useState(false);
+    const [isLoading, setIsLoading] = useState(true);
 
-    // Load portfolio from localStorage or use defaults
-    const [portfolio, setPortfolio] = useState(() => {
-        if (typeof window !== "undefined") {
-            const saved = localStorage.getItem("portfolio");
-            if (saved) return JSON.parse(saved);
-        }
-        return {
-            cashBalance: 0,
-            invested: 0,
-            allocation: { thai: 25, us: 25, gold: 25, bonds: 25 },
-        };
+    const [portfolio, setPortfolio] = useState({
+        cashBalance: 0,
+        invested: 0,
+        allocation: { thai: 25, us: 25, gold: 25, bonds: 25 },
     });
 
     const [performanceData, setPerformanceData] = useState<{ month: string; portfolio: number; benchmark: number }[]>([]);
+
+    // Fetch portfolio from database
+    useEffect(() => {
+        async function loadPortfolio() {
+            if (user?.id) {
+                const data = await getPortfolio(user.id);
+                if (data) {
+                    setPortfolio({
+                        cashBalance: data.cashBalance,
+                        invested: data.investedAmount,
+                        allocation: data.allocation,
+                    });
+                }
+            }
+            setIsLoading(false);
+        }
+        loadPortfolio();
+    }, [user?.id]);
 
     // Fetch market data on mount and every 10 seconds
     useEffect(() => {

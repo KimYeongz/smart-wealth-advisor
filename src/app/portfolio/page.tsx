@@ -5,60 +5,82 @@ import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { MetricCard } from "@/components/ui/MetricCard";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { useAuth } from "@/context/AuthContext";
 import { formatCurrency, formatThaiDate } from "@/lib/utils";
 import { getAllMarketData, calculatePortfolioValue, MarketPrice } from "@/lib/marketData";
-import { Wallet, PiggyBank, TrendingUp, ArrowUpDown, RefreshCw, Check, AlertCircle } from "lucide-react";
+import {
+    getPortfolio,
+    getTransactions,
+    deposit as depositService,
+    withdraw as withdrawService,
+    invest as investService,
+    Transaction as ServiceTransaction
+} from "@/lib/portfolioService";
+import { Wallet, PiggyBank, TrendingUp, ArrowUpDown, Check, AlertCircle, Loader2 } from "lucide-react";
 
-interface Transaction {
-    id: string;
-    type: "deposit" | "withdraw" | "invest";
-    amount: number;
-    date: Date;
-    description: string;
-}
-
-interface Portfolio {
+interface PortfolioState {
     cashBalance: number;
     invested: number;
     allocation: { thai: number; us: number; gold: number; bonds: number };
 }
 
 export default function PortfolioPage() {
+    const { user } = useAuth();
     const [marketData, setMarketData] = useState<MarketPrice[]>([]);
     const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
+    const [isLoading, setIsLoading] = useState(true);
+    const [isSaving, setIsSaving] = useState(false);
 
-    // Load from localStorage
-    const [portfolio, setPortfolio] = useState<Portfolio>(() => {
-        if (typeof window !== "undefined") {
-            const saved = localStorage.getItem("portfolio");
-            if (saved) return JSON.parse(saved);
-        }
-        return {
-            cashBalance: 0,
-            invested: 0,
-            allocation: { thai: 25, us: 25, gold: 25, bonds: 25 },
-        };
+    const [portfolio, setPortfolio] = useState<PortfolioState>({
+        cashBalance: 0,
+        invested: 0,
+        allocation: { thai: 25, us: 25, gold: 25, bonds: 25 },
     });
 
-    const [transactions, setTransactions] = useState<Transaction[]>(() => {
-        if (typeof window !== "undefined") {
-            const saved = localStorage.getItem("transactions");
-            if (saved) return JSON.parse(saved).map((t: any) => ({ ...t, date: new Date(t.date) }));
-        }
-        return [];
-    });
-
+    const [transactions, setTransactions] = useState<ServiceTransaction[]>([]);
     const [activeTab, setActiveTab] = useState<"deposit" | "withdraw" | "invest" | "history">("deposit");
     const [amount, setAmount] = useState("");
     const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
     // Allocation state with percentage inputs
     const [allocation, setAllocation] = useState({
-        thai: portfolio.allocation.thai.toString(),
-        us: portfolio.allocation.us.toString(),
-        gold: portfolio.allocation.gold.toString(),
-        bonds: portfolio.allocation.bonds.toString(),
+        thai: "25",
+        us: "25",
+        gold: "25",
+        bonds: "25",
     });
+
+    // Load portfolio and transactions from database
+    useEffect(() => {
+        async function loadData() {
+            if (user?.id) {
+                setIsLoading(true);
+
+                const [portfolioData, txData] = await Promise.all([
+                    getPortfolio(user.id),
+                    getTransactions(user.id),
+                ]);
+
+                if (portfolioData) {
+                    setPortfolio({
+                        cashBalance: portfolioData.cashBalance,
+                        invested: portfolioData.investedAmount,
+                        allocation: portfolioData.allocation,
+                    });
+                    setAllocation({
+                        thai: portfolioData.allocation.thai.toString(),
+                        us: portfolioData.allocation.us.toString(),
+                        gold: portfolioData.allocation.gold.toString(),
+                        bonds: portfolioData.allocation.bonds.toString(),
+                    });
+                }
+
+                setTransactions(txData);
+                setIsLoading(false);
+            }
+        }
+        loadData();
+    }, [user?.id]);
 
     // Fetch market data
     useEffect(() => {
@@ -72,15 +94,6 @@ export default function PortfolioPage() {
         return () => clearInterval(interval);
     }, []);
 
-    // Save to localStorage
-    useEffect(() => {
-        localStorage.setItem("portfolio", JSON.stringify(portfolio));
-    }, [portfolio]);
-
-    useEffect(() => {
-        localStorage.setItem("transactions", JSON.stringify(transactions));
-    }, [transactions]);
-
     // Calculate portfolio values
     const portfolioCalc = calculatePortfolioValue(
         portfolio.cashBalance,
@@ -89,84 +102,98 @@ export default function PortfolioPage() {
         marketData
     );
 
-    const addTransaction = (type: Transaction["type"], amount: number, description: string) => {
-        const newTx: Transaction = {
-            id: `tx-${Date.now()}`,
-            type,
-            amount,
-            date: new Date(),
-            description,
-        };
-        setTransactions(prev => [newTx, ...prev]);
+    const refreshData = async () => {
+        if (user?.id) {
+            const [portfolioData, txData] = await Promise.all([
+                getPortfolio(user.id),
+                getTransactions(user.id),
+            ]);
+
+            if (portfolioData) {
+                setPortfolio({
+                    cashBalance: portfolioData.cashBalance,
+                    invested: portfolioData.investedAmount,
+                    allocation: portfolioData.allocation,
+                });
+            }
+            setTransactions(txData);
+        }
     };
 
-    const handleDeposit = () => {
+    const handleDeposit = async () => {
         const depositAmount = parseFloat(amount);
         if (isNaN(depositAmount) || depositAmount <= 0) {
             setMessage({ type: "error", text: "กรุณาระบุจำนวนเงินที่ถูกต้อง" });
             return;
         }
+        if (!user?.id) {
+            setMessage({ type: "error", text: "กรุณาเข้าสู่ระบบก่อน" });
+            return;
+        }
 
-        setPortfolio(prev => ({
-            ...prev,
-            cashBalance: prev.cashBalance + depositAmount,
-        }));
-        addTransaction("deposit", depositAmount, `ฝากเงิน ${formatCurrency(depositAmount)}`);
-        setAmount("");
-        setMessage({ type: "success", text: `ฝากเงิน ${formatCurrency(depositAmount)} สำเร็จ` });
+        setIsSaving(true);
+        const success = await depositService(user.id, depositAmount);
+
+        if (success) {
+            await refreshData();
+            setAmount("");
+            setMessage({ type: "success", text: `ฝากเงิน ${formatCurrency(depositAmount)} สำเร็จ` });
+        } else {
+            setMessage({ type: "error", text: "เกิดข้อผิดพลาดในการฝากเงิน" });
+        }
+        setIsSaving(false);
     };
 
-    const handleWithdraw = () => {
+    const handleWithdraw = async () => {
         const withdrawAmount = parseFloat(amount);
         if (isNaN(withdrawAmount) || withdrawAmount <= 0) {
             setMessage({ type: "error", text: "กรุณาระบุจำนวนเงินที่ถูกต้อง" });
             return;
         }
-        if (withdrawAmount > portfolio.cashBalance) {
-            setMessage({ type: "error", text: "ยอดเงินสดไม่เพียงพอ" });
+        if (!user?.id) {
+            setMessage({ type: "error", text: "กรุณาเข้าสู่ระบบก่อน" });
             return;
         }
 
-        setPortfolio(prev => ({
-            ...prev,
-            cashBalance: prev.cashBalance - withdrawAmount,
-        }));
-        addTransaction("withdraw", withdrawAmount, `ถอนเงิน ${formatCurrency(withdrawAmount)}`);
-        setAmount("");
-        setMessage({ type: "success", text: `ถอนเงิน ${formatCurrency(withdrawAmount)} สำเร็จ` });
+        setIsSaving(true);
+        const result = await withdrawService(user.id, withdrawAmount);
+
+        if (result.success) {
+            await refreshData();
+            setAmount("");
+            setMessage({ type: "success", text: result.message });
+        } else {
+            setMessage({ type: "error", text: result.message });
+        }
+        setIsSaving(false);
     };
 
-    const handleInvest = () => {
-        const thai = parseFloat(allocation.thai) || 0;
-        const us = parseFloat(allocation.us) || 0;
-        const gold = parseFloat(allocation.gold) || 0;
-        const bonds = parseFloat(allocation.bonds) || 0;
-        const total = thai + us + gold + bonds;
-
-        if (total !== 100) {
-            setMessage({ type: "error", text: `สัดส่วนรวมต้องเท่ากับ 100% (ปัจจุบัน: ${total}%)` });
-            return;
-        }
-        if (portfolio.cashBalance <= 0) {
-            setMessage({ type: "error", text: "ไม่มียอดเงินสดสำหรับลงทุน" });
+    const handleInvest = async () => {
+        if (!user?.id) {
+            setMessage({ type: "error", text: "กรุณาเข้าสู่ระบบก่อน" });
             return;
         }
 
-        const investAmount = portfolio.cashBalance;
-        const newAllocation = { thai, us, gold, bonds };
+        const newAllocation = {
+            thai: parseFloat(allocation.thai) || 0,
+            us: parseFloat(allocation.us) || 0,
+            gold: parseFloat(allocation.gold) || 0,
+            bonds: parseFloat(allocation.bonds) || 0,
+        };
 
-        setPortfolio(prev => ({
-            ...prev,
-            invested: prev.invested + investAmount,
-            cashBalance: 0,
-            allocation: newAllocation,
-        }));
-        addTransaction("invest", investAmount, `ลงทุน: หุ้นไทย ${thai}%, หุ้น US ${us}%, ทองคำ ${gold}%, พันธบัตร ${bonds}%`);
-        setMessage({ type: "success", text: `ลงทุน ${formatCurrency(investAmount)} ตามสัดส่วนที่กำหนด` });
+        setIsSaving(true);
+        const result = await investService(user.id, newAllocation);
+
+        if (result.success) {
+            await refreshData();
+            setMessage({ type: "success", text: result.message });
+        } else {
+            setMessage({ type: "error", text: result.message });
+        }
+        setIsSaving(false);
     };
 
     const handleAllocationChange = (key: keyof typeof allocation, value: string) => {
-        // Only allow numbers and decimal point
         if (value && !/^\d*\.?\d*$/.test(value)) return;
         setAllocation(prev => ({ ...prev, [key]: value }));
     };
@@ -177,7 +204,7 @@ export default function PortfolioPage() {
         (parseFloat(allocation.gold) || 0) +
         (parseFloat(allocation.bonds) || 0);
 
-    const getTransactionIcon = (type: Transaction["type"]) => {
+    const getTransactionIcon = (type: ServiceTransaction["type"]) => {
         switch (type) {
             case "deposit": return "💳";
             case "withdraw": return "🏧";
@@ -185,7 +212,7 @@ export default function PortfolioPage() {
         }
     };
 
-    const getTransactionColor = (type: Transaction["type"]) => {
+    const getTransactionColor = (type: ServiceTransaction["type"]) => {
         switch (type) {
             case "deposit": return "text-green-400";
             case "withdraw": return "text-red-400";
@@ -199,6 +226,17 @@ export default function PortfolioPage() {
         { id: "invest", label: "📊 ลงทุน" },
         { id: "history", label: "📜 ประวัติ" },
     ];
+
+    if (isLoading) {
+        return (
+            <DashboardLayout>
+                <div className="flex items-center justify-center h-96">
+                    <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                    <span className="ml-3 text-gray-400">กำลังโหลดข้อมูล...</span>
+                </div>
+            </DashboardLayout>
+        );
+    }
 
     return (
         <DashboardLayout>
@@ -258,8 +296,8 @@ export default function PortfolioPage() {
                         <button
                             key={tab.id}
                             className={`flex-1 px-6 py-4 text-sm font-medium transition-colors ${activeTab === tab.id
-                                ? "text-primary border-b-2 border-primary bg-primary/5"
-                                : "text-gray-400 hover:text-white hover:bg-dark-50"
+                                    ? "text-primary border-b-2 border-primary bg-primary/5"
+                                    : "text-gray-400 hover:text-white hover:bg-dark-50"
                                 }`}
                             onClick={() => {
                                 setActiveTab(tab.id as typeof activeTab);
@@ -276,8 +314,8 @@ export default function PortfolioPage() {
                     {message && (
                         <div
                             className={`mb-6 p-4 rounded-lg border flex items-center gap-3 ${message.type === "success"
-                                ? "bg-green-500/10 border-green-500/30 text-green-400"
-                                : "bg-red-500/10 border-red-500/30 text-red-400"
+                                    ? "bg-green-500/10 border-green-500/30 text-green-400"
+                                    : "bg-red-500/10 border-red-500/30 text-red-400"
                                 }`}
                         >
                             {message.type === "success" ? <Check className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
@@ -308,7 +346,7 @@ export default function PortfolioPage() {
                                         </button>
                                     ))}
                                 </div>
-                                <Button onClick={handleDeposit} className="w-full">
+                                <Button onClick={handleDeposit} className="w-full" isLoading={isSaving}>
                                     ฝากเงิน
                                 </Button>
                             </div>
@@ -330,7 +368,7 @@ export default function PortfolioPage() {
                                     onChange={(e) => setAmount(e.target.value)}
                                     placeholder="50,000"
                                 />
-                                <Button onClick={handleWithdraw} className="w-full">
+                                <Button onClick={handleWithdraw} className="w-full" isLoading={isSaving}>
                                     ถอนเงิน
                                 </Button>
                             </div>
@@ -445,8 +483,8 @@ export default function PortfolioPage() {
                                     {/* Total Indicator */}
                                     <div
                                         className={`p-4 rounded-lg border mb-6 ${totalAllocation === 100
-                                            ? "bg-green-500/10 border-green-500/30 text-green-400"
-                                            : "bg-yellow-500/10 border-yellow-500/30 text-yellow-400"
+                                                ? "bg-green-500/10 border-green-500/30 text-green-400"
+                                                : "bg-yellow-500/10 border-yellow-500/30 text-yellow-400"
                                             }`}
                                     >
                                         <div className="flex items-center justify-between">
@@ -460,7 +498,7 @@ export default function PortfolioPage() {
                                         </div>
                                     </div>
 
-                                    <Button onClick={handleInvest} className="w-full" disabled={totalAllocation !== 100}>
+                                    <Button onClick={handleInvest} className="w-full" disabled={totalAllocation !== 100} isLoading={isSaving}>
                                         ยืนยันลงทุน {formatCurrency(portfolio.cashBalance)}
                                     </Button>
                                 </>
@@ -489,7 +527,7 @@ export default function PortfolioPage() {
                                                 <span className="text-2xl">{getTransactionIcon(tx.type)}</span>
                                                 <div>
                                                     <p className="font-medium text-white">{tx.description}</p>
-                                                    <p className="text-sm text-gray-500">{formatThaiDate(tx.date)}</p>
+                                                    <p className="text-sm text-gray-500">{formatThaiDate(tx.createdAt)}</p>
                                                 </div>
                                             </div>
                                             <p className={`font-bold ${getTransactionColor(tx.type)}`}>
